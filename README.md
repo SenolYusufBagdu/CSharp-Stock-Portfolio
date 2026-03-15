@@ -1,7 +1,93 @@
-📈 C# Stock Portfolio Manager
+🇬🇧 EN – C# Stock Portfolio Manager
 
-Basit bir C# Console uygulaması.
-Birden fazla kullanıcı için hisse portföyü yönetimi yapılabilir.
+A simple C# console application. It allows managing stock portfolios for multiple users.
+
+🚀 Features
+
+👤 Create multiple users
+
+📊 List user’s stocks
+
+➕ Add stock
+
+❌ Remove stock
+
+🔁 Transfer stocks between users
+
+💰 Calculate user’s net portfolio value
+
+💾 Store data in a file
+
+🧠 Technologies Used
+
+C#
+
+.NET Console Application
+
+File I/O (Read/Write files)
+
+Object Oriented Programming (OOP)
+
+📂 Data Structure
+
+Data is stored in the file veriler.txt.
+
+Example:
+
+Ali|THYAO,10,200;ASELS,5,80
+Mehmet|GARAN,20,45
+
+Format:
+Username|Symbol,Quantity,Price;Symbol,Quantity,Price
+
+🖥️ Program Menu
+
+Main Menu:
+
+Select User
+
+New User
+
+Exit
+
+User Menu:
+
+List Stocks
+
+Add Stock
+
+Remove Stock
+
+Transfer Stock
+
+Calculate Net Value
+
+Back
+
+📊 Net Value Calculation
+
+User’s portfolio value is calculated as:
+
+Total = Quantity × Price
+🎯 Purpose
+
+This project is developed to practice:
+
+Learning C#
+
+Using OOP
+
+File operations
+
+Basic data management
+
+👨‍💻 Author
+
+Şenol Yusuf Bağdu
+
+🇹🇷 TR – C# Hisse Portföy Yöneticisi
+
+Basit bir C# Console uygulaması. Birden fazla kullanıcı için hisse portföyü yönetimi yapılabilir.
 
 🚀 Özellikler
 
@@ -33,41 +119,46 @@ Object Oriented Programming (OOP)
 
 Veriler veriler.txt dosyasında saklanır.
 
-Örnek veri formatı:
+Örnek veri:
 
 Ali|THYAO,10,200;ASELS,5,80
 Mehmet|GARAN,20,45
 
 Format:
-
 KullanıcıAdı|Sembol,Adet,Fiyat;Sembol,Adet,Fiyat
 
 🖥️ Program Menü
 
 Ana Menü:
 
-1 - Kullanıcı Seç
-2 - Yeni Kullanıcı
-3 - Çıkış
+Kullanıcı Seç
+
+Yeni Kullanıcı
+
+Çıkış
 
 Kullanıcı Menüsü:
 
-1 - Hisseleri Listele
-2 - Hisse Ekle
-3 - Hisse Sil
-4 - Hisse Transfer
-5 - Net Değer
-6 - Geri
+Hisseleri Listele
+
+Hisse Ekle
+
+Hisse Sil
+
+Hisse Transfer
+
+Net Değer Hesapla
+
+Geri
 
 📊 Net Değer Hesabı
 
 Kullanıcının portföy değeri şu şekilde hesaplanır:
 
 Toplam = Adet × Fiyat
-
 🎯 Amaç
 
-Bu proje:
+Bu proje aşağıdaki konuları pratik etmek için geliştirilmiştir:
 
 C# öğrenme
 
@@ -77,8 +168,6 @@ Dosya işlemleri
 
 Basit veri yönetimi
 
-gibi konuları pratik etmek için geliştirilmiştir.
-
-👨‍💻 Author
+👨‍💻 Yazar
 
 Şenol Yusuf Bağdu
