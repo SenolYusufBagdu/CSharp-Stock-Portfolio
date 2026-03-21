@@ -1,425 +1,376 @@
+
+
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
+using System.Threading.Tasks;
+using PortfolioEngine.Models;
+using PortfolioEngine.Repository;
+using PortfolioEngine.Services;
 
-// model for a single stock holding
-class Stock
+namespace PortfolioEngine
 {
-    public string Symbol { get; set; }
-    public int Quantity { get; set; }
-    public decimal BuyPrice { get; set; }      // original purchase price
-    public decimal CurrentPrice { get; set; }  // latest market price
-    public DateTime BuyDate { get; set; }
-
-    // total value at purchase
-    public decimal TotalBuyValue => Quantity * BuyPrice;
-
-    // total value at current price
-    public decimal TotalCurrentValue => Quantity * CurrentPrice;
-
-    // profit or loss in currency
-    public decimal ProfitLoss => TotalCurrentValue - TotalBuyValue;
-
-    // profit or loss as percentage
-    public decimal ProfitLossPercent => BuyPrice > 0
-        ? Math.Round((CurrentPrice - BuyPrice) / BuyPrice * 100, 2)
-        : 0;
-}
-
-// single transaction record for history tracking
-class Transaction
-{
-    public string Type { get; set; }        // BUY / SELL / UPDATE / TRANSFER
-    public string Symbol { get; set; }
-    public int Quantity { get; set; }
-    public decimal Price { get; set; }
-    public DateTime Date { get; set; }
-    public string Note { get; set; }
-}
-
-// user model holding stocks and transaction history
-class User
-{
-    public string Name { get; set; }
-    public List<Stock> Stocks { get; set; } = new List<Stock>();
-    public List<Transaction> History { get; set; } = new List<Transaction>();
-}
-
-class Program
-{
-    static List<User> users = new List<User>();
-    static string dataFile = "portfolio.json";
-
-    static void Main()
+    class Program
     {
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
-        LoadData();
+        // exposed for PortfolioService.GetAllUsers
+        // exposed 
+        public static List<User> Users = new();
 
-        while (true)
+        static readonly UserRepository     _repo      = new();
+        static readonly PortfolioService   _portfolio = new(_repo);
+        static readonly RiskService        _risk      = new();
+        static readonly AnalyticsService   _analytics = new();
+        static          IMarketDataProvider _market   = new ManualPriceProvider();
+
+        static async Task Main()
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            Users = _repo.LoadAll();
+
+            while (true)
+            {
+                Console.Clear();
+                Header("QUANTITATIVE PORTFOLIO ENGINE");
+                Console.WriteLine("  1  →  Select User");
+                Console.WriteLine("  2  →  New User");
+                Console.WriteLine("  3  →  All Users Overview");
+                Console.WriteLine("  4  →  Search by Symbol");
+                Console.WriteLine("  5  →  Set Market Data Provider");
+                Console.WriteLine("  0  →  Exit");
+                Divider();
+                Console.Write("Choice: ");
+                string c = Console.ReadLine();
+
+                if      (c == "1") await SelectUser();
+                else if (c == "2") NewUser();
+                else if (c == "3") AllUsersOverview();
+                else if (c == "4") SearchBySymbol();
+                else if (c == "5") SetProvider();
+                else if (c == "0") break;
+            }
+        }
+
+        // ----------- USER MANAGEMENT
+
+        static void NewUser()
+        {
+            Console.Write("Username: ");
+            string name = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(name)) return;
+
+            if (Users.Any(u => u.Name == name))
+            {
+                Console.WriteLine("User already exists."); Wait(); return;
+            }
+
+            Console.Write("Starting balance (default 10000): ");
+            string balInput = Console.ReadLine();
+            decimal balance = decimal.TryParse(balInput, out var b) ? b : 10000m;
+
+            Users.Add(new User { Name = name, Balance = balance });
+            _repo.SaveAll(Users);
+            Console.WriteLine($"✅ User '{name}' created with balance {balance:N2}");
+            Wait();
+        }
+
+        static async Task SelectUser()
+        {
+            Console.Write("Username: ");
+            string name = Console.ReadLine()?.Trim();
+            var user = Users.FirstOrDefault(u => u.Name == name);
+            if (user == null) { Console.WriteLine("❌ Not found."); Wait(); return; }
+            await UserMenu(user);
+        }
+
+        static void AllUsersOverview()
         {
             Console.Clear();
-            Console.WriteLine("╔══════════════════════════════╗");
-            Console.WriteLine("║     PORTFOLIO TRACKER        ║");
-            Console.WriteLine("╚══════════════════════════════╝");
-            Console.WriteLine("  1  →  Select User");
-            Console.WriteLine("  2  →  New User");
-            Console.WriteLine("  3  →  List All Users");
-            Console.WriteLine("  4  →  Search by Symbol");
-            Console.WriteLine("  0  →  Exit");
-            Console.Write("\nChoice: ");
-            string choice = Console.ReadLine();
-
-            if (choice == "1") SelectUser();
-            else if (choice == "2") NewUser();
-            else if (choice == "3") ListAllUsers();
-            else if (choice == "4") SearchBySymbol();
-            else if (choice == "0") break;
-            else Console.WriteLine("Invalid choice.");
+            Header("ALL USERS");
+            foreach (var u in Users)
+            {
+                string arrow = u.TotalPnL >= 0 ? "▲" : "▼";
+                Console.WriteLine($"  👤 {u.Name,-20} | Positions: {u.Positions.Count,3} | " +
+                                  $"Balance: {u.Balance,10:N2} | Exposure: {u.TotalExposure,10:N2} | " +
+                                  $"P/L: {arrow} {Math.Abs(u.TotalPnL):N2}");
+            }
+            Wait();
         }
-    }
 
-    // ================= FILE OPERATIONS =================
-
-    static void LoadData()
-    {
-        // if file doesn't exist, start with empty list
-        if (!File.Exists(dataFile)) return;
-
-        try
+        static void SearchBySymbol()
         {
-            string json = File.ReadAllText(dataFile);
-            users = JsonSerializer.Deserialize<List<User>>(json)
-                    ?? new List<User>();
+            Console.Write("Symbol: ");
+            string sym = Console.ReadLine()?.Trim().ToUpper();
+            Console.Clear();
+            Header($"SEARCH: {sym}");
+            bool found = false;
+
+            foreach (var u in Users)
+            {
+                var p = u.Positions.FirstOrDefault(x => x.Symbol == sym);
+                if (p == null) continue;
+                found = true;
+                string arrow = p.UnrealizedPnL >= 0 ? "▲" : "▼";
+                Console.WriteLine($"  👤 {u.Name,-20} | Qty: {p.Quantity,6} | " +
+                                  $"Avg: {p.AvgBuyPrice,8:N2} | Current: {p.CurrentPrice,8:N2} | " +
+                                  $"P/L: {arrow} {Math.Abs(p.UnrealizedPnL):N2} ({p.UnrealizedPnLPercent:+0.00;-0.00}%)");
+            }
+
+            if (!found) Console.WriteLine("  No positions found.");
+            Wait();
         }
-        catch
+
+        static void SetProvider()
         {
-            // if file is corrupted, start fresh
-            users = new List<User>();
+            Console.WriteLine("  1  →  Manual (no API)");
+            Console.WriteLine("  2  →  Finnhub");
+            Console.WriteLine("  3  →  AlphaVantage");
+            Console.Write("Choice: ");
+            string c = Console.ReadLine();
+
+            if (c == "2")
+            {
+                Console.Write("Finnhub API Key: ");
+                _market = new FinnhubProvider(Console.ReadLine());
+                Console.WriteLine("✅ Finnhub active.");
+            }
+            else if (c == "3")
+            {
+                Console.Write("AlphaVantage API Key: ");
+                _market = new AlphaVantageProvider(Console.ReadLine());
+                Console.WriteLine("✅ AlphaVantage active.");
+            }
+            else
+            {
+                _market = new ManualPriceProvider();
+                Console.WriteLine("✅ Manual mode.");
+            }
+            Wait();
         }
-    }
 
-    static void SaveData()
-    {
-        // save to json with readable formatting
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        File.WriteAllText(dataFile, JsonSerializer.Serialize(users, options));
-    }
+        //----USER MENU 
 
-    // ================= USER OPERATIONS =================
-
-    static void NewUser()
-    {
-        Console.Write("Username: ");
-        string name = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(name)) return;
-
-        // prevent duplicate usernames
-        if (users.Any(u => u.Name == name))
+        static async Task UserMenu(User user)
         {
-            Console.WriteLine("User already exists.");
-            Wait(); return;
+            while (true)
+            {
+                Console.Clear();
+                Header($"{user.Name}  |  Balance: {user.Balance:N2}  |  P/L: {user.TotalPnL:+N2;-N2}");
+                _risk.CheckStopLosses(user);
+                Console.WriteLine("  1  →  Open Positions");
+                Console.WriteLine("  2  →  Buy");
+                Console.WriteLine("  3  →  Sell");
+                Console.WriteLine("  4  →  Update Price (manual)");
+                Console.WriteLine("  5  →  Refresh Prices (API)");
+                Console.WriteLine("  6  →  Transfer Position");
+                Console.WriteLine("  7  →  Portfolio Analysis");
+                Console.WriteLine("  8  →  Performance Stats");
+                Console.WriteLine("  9  →  Risk Calculator");
+                Console.WriteLine("  10 →  Transaction History");
+                Console.WriteLine("  0  →  Back");
+                Divider();
+                Console.Write("Choice: ");
+                string c = Console.ReadLine();
+
+                if      (c == "1")  ShowPositions(user);
+                else if (c == "2")  Buy(user);
+                else if (c == "3")  Sell(user);
+                else if (c == "4")  UpdatePriceManual(user);
+                else if (c == "5")  await RefreshPrices(user);
+                else if (c == "6")  Transfer(user);
+                else if (c == "7")  PortfolioAnalysis(user);
+                else if (c == "8")  PerformanceStats(user);
+                else if (c == "9")  RiskCalculator(user);
+                else if (c == "10") ShowHistory(user);
+                else if (c == "0")  break;
+            }
         }
 
-        users.Add(new User { Name = name });
-        SaveData();
-        Console.WriteLine($"✅ User '{name}' created.");
-        Wait();
-    }
+        // TRADING OPERATIONS
 
-    static void SelectUser()
-    {
-        Console.Write("Username: ");
-        string name = Console.ReadLine()?.Trim();
-        var user = users.FirstOrDefault(u => u.Name == name);
-
-        if (user == null) { Console.WriteLine("❌ User not found."); Wait(); return; }
-        UserMenu(user);
-    }
-
-    static void ListAllUsers()
-    {
-        Console.Clear();
-        Console.WriteLine("═══════════════ ALL USERS ═══════════════");
-
-        if (!users.Any()) { Console.WriteLine("No users yet."); Wait(); return; }
-
-        foreach (var u in users)
+        static void Buy(User user)
         {
-            decimal invested = u.Stocks.Sum(s => s.TotalBuyValue);
-            decimal current = u.Stocks.Sum(s => s.TotalCurrentValue);
-            decimal pl = current - invested;
-            string arrow = pl >= 0 ? "▲" : "▼";
+            Console.Write("Symbol: ");
+            string sym = Console.ReadLine()?.Trim().ToUpper();
+            Console.Write("Sector (e.g. Tech, Finance): ");
+            string sector = Console.ReadLine()?.Trim() ?? "Unknown";
+            Console.Write("Quantity: ");
+            if (!int.TryParse(Console.ReadLine(), out int qty) || qty <= 0)
+            { Console.WriteLine("Invalid quantity."); Wait(); return; }
+            Console.Write("Buy Price: ");
+            if (!decimal.TryParse(Console.ReadLine(), out decimal price) || price <= 0)
+            { Console.WriteLine("Invalid price."); Wait(); return; }
+            Console.Write("Stop-Loss (0 to skip): ");
+            decimal.TryParse(Console.ReadLine(), out decimal sl);
 
-            Console.WriteLine($"  👤 {u.Name,-20} | Stocks: {u.Stocks.Count,3} | " +
-                              $"Invested: {invested,10:N2} | Value: {current,10:N2} | " +
-                              $"P/L: {arrow} {Math.Abs(pl):N2}");
+           
+            var risk = _risk.CalculatePositionSize(user.Balance, price, sl > 0 ? sl : price * 0.95m);
+            Console.WriteLine($"\n  Recommended size : {risk.PositionSize} shares ({risk.RiskAmount:N2} at risk)");
+            Console.WriteLine($"  Portfolio exposure: {risk.ExposurePercent}%");
+            if (!string.IsNullOrEmpty(risk.Warning)) Console.WriteLine($"  {risk.Warning}");
+
+            Console.Write("\nConfirm? (y/n): ");
+            if (Console.ReadLine()?.ToLower() != "y") return;
+
+            _portfolio.Buy(user, sym, sector, qty, price, sl);
+            Console.WriteLine($"✅ BUY {qty} {sym} @ {price:N2}");
+            Wait();
         }
-        Wait();
-    }
 
-    static void SearchBySymbol()
-    {
-        Console.Write("Symbol: ");
-        string symbol = Console.ReadLine()?.Trim().ToUpper();
-        Console.Clear();
-        Console.WriteLine($"═══════════════ RESULTS: {symbol} ═══════════════");
-
-        bool found = false;
-        foreach (var u in users)
+        static void Sell(User user)
         {
-            var stock = u.Stocks.FirstOrDefault(s => s.Symbol == symbol);
-            if (stock == null) continue;
+            Console.Write("Symbol: ");
+            string sym = Console.ReadLine()?.Trim().ToUpper();
+            var pos = user.Positions.FirstOrDefault(p => p.Symbol == sym);
+            if (pos == null) { Console.WriteLine("Position not found."); Wait(); return; }
 
-            found = true;
-            string arrow = stock.ProfitLoss >= 0 ? "▲" : "▼";
-            Console.WriteLine($"  👤 {u.Name,-20} | Qty: {stock.Quantity,6} | " +
-                              $"Buy: {stock.BuyPrice,8:N2} | Current: {stock.CurrentPrice,8:N2} | " +
-                              $"P/L: {arrow} {Math.Abs(stock.ProfitLoss):N2} ({stock.ProfitLossPercent:+0.00;-0.00}%)");
+            Console.WriteLine($"  Holding {pos.Quantity} shares at avg {pos.AvgBuyPrice:N2}");
+            Console.Write("Quantity to sell: ");
+            if (!int.TryParse(Console.ReadLine(), out int qty) || qty <= 0)
+            { Console.WriteLine("Invalid quantity."); Wait(); return; }
+            Console.Write("Sell Price: ");
+            if (!decimal.TryParse(Console.ReadLine(), out decimal price) || price <= 0)
+            { Console.WriteLine("Invalid price."); Wait(); return; }
+
+            decimal realizedPnL = (price - pos.AvgBuyPrice) * qty;
+            Console.WriteLine($"\n  Realized P/L on this trade: {realizedPnL:+N2;-N2}");
+            Console.Write("Confirm? (y/n): ");
+            if (Console.ReadLine()?.ToLower() != "y") return;
+
+            _portfolio.Sell(user, sym, qty, price);
+            Console.WriteLine($"✅ SELL {qty} {sym} @ {price:N2} | P/L: {realizedPnL:+N2;-N2}");
+            Wait();
         }
 
-        if (!found) Console.WriteLine("No results found.");
-        Wait();
-    }
+        static void UpdatePriceManual(User user)
+        {
+            Console.Write("Symbol: ");
+            string sym = Console.ReadLine()?.Trim().ToUpper();
+            Console.Write("New Price: ");
+            if (!decimal.TryParse(Console.ReadLine(), out decimal price))
+            { Console.WriteLine("Invalid price."); Wait(); return; }
+            _portfolio.UpdatePrice(user, sym, price);
+            Console.WriteLine($"✅ {sym} updated to {price:N2}");
+            Wait();
+        }
 
-    // ================= USER MENU =================
+        static async Task RefreshPrices(User user)
+        {
+            if (!user.Positions.Any()) { Console.WriteLine("No open positions."); Wait(); return; }
 
-    static void UserMenu(User u)
-    {
-        while (true)
+            Console.WriteLine($"  Fetching prices via {_market.ProviderName}...");
+            foreach (var p in user.Positions)
+            {
+                decimal live = await _market.GetPriceAsync(p.Symbol);
+                if (live > 0)
+                {
+                    p.CurrentPrice = live;
+                    Console.WriteLine($"  {p.Symbol,-8} → {live:N2}");
+                }
+                else
+                {
+                    // API returned no dataa.
+                    Console.Write($"  {p.Symbol} price not found. Enter manually: ");
+                    if (decimal.TryParse(Console.ReadLine(), out decimal manual))
+                        p.CurrentPrice = manual;
+                }
+            }
+            _repo.SaveAll(Users);
+            Console.WriteLine("✅ Prices updated.");
+            Wait();
+        }
+
+        static void Transfer(User sender)
+        {
+            Console.Write("Recipient: ");
+            string name = Console.ReadLine()?.Trim();
+            var recipient = Users.FirstOrDefault(u => u.Name == name);
+            if (recipient == null) { Console.WriteLine("User not found."); Wait(); return; }
+            Console.Write("Symbol: ");
+            string sym = Console.ReadLine()?.Trim().ToUpper();
+            bool ok = _portfolio.Transfer(sender, recipient, sym);
+            Console.WriteLine(ok ? $"✅ {sym} transferred to {name}." : "❌ Transfer failed.");
+            Wait();
+        }
+
+        // ANALYTICS 
+        static void ShowPositions(User user)
         {
             Console.Clear();
-            Console.WriteLine($"╔══════════════════════════════╗");
-            Console.WriteLine($"║  {u.Name,-28}║");
-            Console.WriteLine($"╚══════════════════════════════╝");
-            Console.WriteLine("  1  →  List Stocks");
-            Console.WriteLine("  2  →  Add Stock");
-            Console.WriteLine("  3  →  Remove Stock");
-            Console.WriteLine("  4  →  Update Price");
-            Console.WriteLine("  5  →  Transfer Stock");
-            Console.WriteLine("  6  →  Portfolio Analysis");
-            Console.WriteLine("  7  →  Transaction History");
-            Console.WriteLine("  0  →  Back");
-            Console.Write("\nChoice: ");
-            string choice = Console.ReadLine();
-
-            if (choice == "1") ListStocks(u);
-            else if (choice == "2") AddStock(u);
-            else if (choice == "3") RemoveStock(u);
-            else if (choice == "4") UpdatePrice(u);
-            else if (choice == "5") Transfer(u);
-            else if (choice == "6") PortfolioAnalysis(u);
-            else if (choice == "7") ShowHistory(u);
-            else if (choice == "0") break;
-        }
-    }
-
-    // ================= STOCK OPERATIONS =================
-
-    static void ListStocks(User u)
-    {
-        Console.Clear();
-        Console.WriteLine($"═══════════════ {u.Name}'s STOCKS ═══════════════");
-
-        if (!u.Stocks.Any()) { Console.WriteLine("No stocks found."); Wait(); return; }
-
-        Console.WriteLine($"  {"Symbol",-8} {"Qty",6} {"Buy Price",12} {"Current",12} {"P/L",12} {"P/L%",8}");
-        Console.WriteLine(new string('─', 65));
-
-        foreach (var s in u.Stocks)
-        {
-            string arrow = s.ProfitLoss >= 0 ? "▲" : "▼";
-            Console.WriteLine($"  {s.Symbol,-8} {s.Quantity,6} {s.BuyPrice,12:N2} {s.CurrentPrice,12:N2} " +
-                              $"{arrow}{Math.Abs(s.ProfitLoss),11:N2} {s.ProfitLossPercent,7:+0.00;-0.00}%");
+            Header($"{user.Name} — OPEN POSITIONS");
+            _analytics.PrintHeatmap(user);
+            _analytics.PrintPnLSummary(user);
+            _risk.PrintRiskSummary(user);
+            Wait();
         }
 
-        Console.WriteLine(new string('─', 65));
-        decimal totalInvested = u.Stocks.Sum(s => s.TotalBuyValue);
-        decimal totalCurrent = u.Stocks.Sum(s => s.TotalCurrentValue);
-        Console.WriteLine($"  {"TOTAL",-8} {"",6} {totalInvested,12:N2} {totalCurrent,12:N2} " +
-                          $"{(totalCurrent - totalInvested > 0 ? "▲" : "▼")}{Math.Abs(totalCurrent - totalInvested),11:N2}");
-        Wait();
-    }
-
-    static void AddStock(User u)
-    {
-        Console.Write("Symbol: ");
-        string symbol = Console.ReadLine()?.Trim().ToUpper();
-        Console.Write("Quantity: ");
-        int qty = int.Parse(Console.ReadLine() ?? "0");
-        Console.Write("Buy Price: ");
-        decimal price = decimal.Parse(Console.ReadLine() ?? "0");
-
-        // add stock to user portfolio
-        u.Stocks.Add(new Stock
+        static void PortfolioAnalysis(User user)
         {
-            Symbol = symbol,
-            Quantity = qty,
-            BuyPrice = price,
-            CurrentPrice = price,  // current starts at buy price
-            BuyDate = DateTime.Now
-        });
-
-        // log this transaction to history
-        LogTransaction(u, "BUY", symbol, qty, price, $"Purchased {qty} {symbol} at {price:N2}");
-        SaveData();
-        Console.WriteLine($"✅ {symbol} added.");
-        Wait();
-    }
-
-    static void RemoveStock(User u)
-    {
-        Console.Write("Symbol to remove: ");
-        string symbol = Console.ReadLine()?.Trim().ToUpper();
-        var stock = u.Stocks.FirstOrDefault(s => s.Symbol == symbol);
-
-        if (stock == null) { Console.WriteLine("Stock not found."); Wait(); return; }
-
-        // log before removing
-        LogTransaction(u, "SELL", symbol, stock.Quantity, stock.CurrentPrice,
-                       $"Removed {symbol} from portfolio");
-        u.Stocks.Remove(stock);
-        SaveData();
-        Console.WriteLine($"✅ {symbol} removed.");
-        Wait();
-    }
-
-    static void UpdatePrice(User u)
-    {
-        // update current market price for a stock
-        Console.Write("Symbol: ");
-        string symbol = Console.ReadLine()?.Trim().ToUpper();
-        var stock = u.Stocks.FirstOrDefault(s => s.Symbol == symbol);
-
-        if (stock == null) { Console.WriteLine("Stock not found."); Wait(); return; }
-
-        decimal oldPrice = stock.CurrentPrice;
-        Console.Write($"New price (current: {oldPrice:N2}): ");
-        decimal newPrice = decimal.Parse(Console.ReadLine() ?? "0");
-
-        stock.CurrentPrice = newPrice;
-
-        // log the price update
-        LogTransaction(u, "UPDATE", symbol, stock.Quantity, newPrice,
-                       $"Price updated: {oldPrice:N2} → {newPrice:N2}");
-        SaveData();
-        Console.WriteLine($"✅ {symbol} price updated to {newPrice:N2}");
-        Wait();
-    }
-
-    static void Transfer(User sender)
-    {
-        Console.Write("Recipient username: ");
-        string recipientName = Console.ReadLine()?.Trim();
-        var recipient = users.FirstOrDefault(u => u.Name == recipientName);
-
-        if (recipient == null) { Console.WriteLine("User not found."); Wait(); return; }
-
-        Console.Write("Symbol to transfer: ");
-        string symbol = Console.ReadLine()?.Trim().ToUpper();
-        var stock = sender.Stocks.FirstOrDefault(s => s.Symbol == symbol);
-
-        if (stock == null) { Console.WriteLine("Stock not found."); Wait(); return; }
-
-        // move stock from sender to recipient
-        recipient.Stocks.Add(stock);
-        sender.Stocks.Remove(stock);
-
-        // log for both users
-        LogTransaction(sender, "TRANSFER", symbol, stock.Quantity, stock.CurrentPrice,
-                       $"Transferred to {recipientName}");
-        LogTransaction(recipient, "TRANSFER", symbol, stock.Quantity, stock.CurrentPrice,
-                       $"Received from {sender.Name}");
-        SaveData();
-        Console.WriteLine($"✅ {symbol} transferred to {recipientName}.");
-        Wait();
-    }
-
-    // ================= PORTFOLIO ANALYSIS =================
-
-    static void PortfolioAnalysis(User u)
-    {
-        Console.Clear();
-        Console.WriteLine($"═══════════════ PORTFOLIO ANALYSIS: {u.Name} ═══════════════");
-
-        if (!u.Stocks.Any()) { Console.WriteLine("No stocks to analyze."); Wait(); return; }
-
-        decimal totalInvested = u.Stocks.Sum(s => s.TotalBuyValue);
-        decimal totalCurrent = u.Stocks.Sum(s => s.TotalCurrentValue);
-        decimal totalPL = totalCurrent - totalInvested;
-        decimal totalPLPct = totalInvested > 0
-                                ? Math.Round(totalPL / totalInvested * 100, 2) : 0;
-
-        // best performing stock
-        var best = u.Stocks.OrderByDescending(s => s.ProfitLossPercent).First();
-
-        // worst performing stock
-        var worst = u.Stocks.OrderBy(s => s.ProfitLossPercent).First();
-
-        // stocks in profit
-        int profitable = u.Stocks.Count(s => s.ProfitLoss > 0);
-
-        // stocks at a loss
-        int losing = u.Stocks.Count(s => s.ProfitLoss < 0);
-
-        Console.WriteLine();
-        Console.WriteLine($"  Total Invested   : {totalInvested,14:N2}");
-        Console.WriteLine($"  Portfolio Value  : {totalCurrent,14:N2}");
-        Console.WriteLine($"  Total P/L        : {(totalPL >= 0 ? "▲" : "▼")} {Math.Abs(totalPL),12:N2}  ({totalPLPct:+0.00;-0.00}%)");
-        Console.WriteLine();
-        Console.WriteLine($"  Best Performer   : {best.Symbol,-8}  ▲ {best.ProfitLossPercent:+0.00}%  ({best.ProfitLoss:+N2})");
-        Console.WriteLine($"  Worst Performer  : {worst.Symbol,-8}  {(worst.ProfitLossPercent >= 0 ? "▲" : "▼")} {worst.ProfitLossPercent:+0.00;-0.00}%  ({worst.ProfitLoss:+N2;-N2})");
-        Console.WriteLine();
-        Console.WriteLine($"  Profitable Stocks: {profitable}");
-        Console.WriteLine($"  Losing Stocks    : {losing}");
-
-        // largest position by current value
-        var largest = u.Stocks.OrderByDescending(s => s.TotalCurrentValue).First();
-        double weight = (double)(largest.TotalCurrentValue / totalCurrent * 100);
-        Console.WriteLine($"  Largest Position : {largest.Symbol} ({weight:0.0}% of portfolio)");
-
-        Wait();
-    }
-
-    // ================= TRANSACTION HISTORY =================
-
-    static void ShowHistory(User u)
-    {
-        Console.Clear();
-        Console.WriteLine($"═══════════════ TRANSACTION HISTORY: {u.Name} ═══════════════");
-
-        if (!u.History.Any()) { Console.WriteLine("No transactions yet."); Wait(); return; }
-
-        // show most recent transactions first
-        foreach (var t in u.History.OrderByDescending(t => t.Date))
-        {
-            Console.WriteLine($"  [{t.Date:yyyy-MM-dd HH:mm}]  {t.Type,-10}  {t.Symbol,-8}  " +
-                              $"Qty: {t.Quantity,6}  Price: {t.Price,10:N2}  |  {t.Note}");
+            Console.Clear();
+            Header($"{user.Name} — PORTFOLIO ANALYSIS");
+            _analytics.PrintHeatmap(user);
+            _analytics.PrintPnLSummary(user);
+            _risk.PrintRiskSummary(user);
+            Wait();
         }
-        Wait();
-    }
 
-    // log a transaction to user history
-    static void LogTransaction(User u, string type, string symbol,
-                                int qty, decimal price, string note)
-    {
-        u.History.Add(new Transaction
+        static void PerformanceStats(User user)
         {
-            Type = type,
-            Symbol = symbol,
-            Quantity = qty,
-            Price = price,
-            Date = DateTime.Now,
-            Note = note
-        });
-    }
+            Console.Clear();
+            Header($"{user.Name} — PERFORMANCE STATS");
+            _analytics.PrintStats(user);
+            Wait();
+        }
 
-    // ================= HELPERS =================
+        static void RiskCalculator(User user)
+        {
+            Console.Clear();
+            Header("RISK CALCULATOR");
+            Console.Write("Entry Price : ");
+            if (!decimal.TryParse(Console.ReadLine(), out decimal entry)) return;
+            Console.Write("Stop-Loss   : ");
+            if (!decimal.TryParse(Console.ReadLine(), out decimal sl)) return;
+            Console.Write("Risk % (default 1.0): ");
+            string rInput = Console.ReadLine();
+            double rPct = double.TryParse(rInput, out var r) ? r : 1.0;
 
-    static void Wait()
-    {
-        Console.WriteLine("\nPress any key to continue...");
-        Console.ReadKey();
+            var result = _risk.CalculatePositionSize(user.Balance, entry, sl, rPct);
+            Console.WriteLine();
+            Console.WriteLine($"  Balance         : {user.Balance:N2}");
+            Console.WriteLine($"  Risk Amount     : {result.RiskAmount:N2}");
+            Console.WriteLine($"  Position Size   : {result.PositionSize} shares");
+            Console.WriteLine($"  Exposure        : {result.ExposurePercent}% of balance");
+            if (!string.IsNullOrEmpty(result.Warning))
+                Console.WriteLine($"  {result.Warning}");
+            Wait();
+        }
+
+        static void ShowHistory(User user)
+        {
+            Console.Clear();
+            Header($"{user.Name} — TRANSACTION HISTORY");
+            if (!user.History.Any()) { Console.WriteLine("No transactions yet."); Wait(); return; }
+
+            foreach (var t in user.History.OrderByDescending(t => t.Date))
+                Console.WriteLine($"  [{t.Date:yyyy-MM-dd HH:mm}]  {t.Type,-10}  {t.Symbol,-8}  " +
+                                  $"Qty: {t.Quantity,6}  Price: {t.Price,10:N2}  |  {t.Note}");
+            Wait();
+        }
+
+        // ─── UI HELPERS ───────────────────────────────────────────
+
+        static void Header(string title)
+        {
+            Console.WriteLine("╔══════════════════════════════════════════════╗");
+            Console.WriteLine($"║  {title,-44}║");
+            Console.WriteLine("╚══════════════════════════════════════════════╝");
+        }
+
+        static void Divider() => Console.WriteLine(new string('─', 48));
+
+        static void Wait()
+        {
+            Console.WriteLine("\nPress any key to continue...");
+            Console.ReadKey();
+        }
     }
 }
