@@ -1,7 +1,0 @@
-senol|XAUSDT,12,120
-senol
-SENOL
-baha|XAUSDT,5,120
-baha
-eren|XAUSDT,5,120
-eren
